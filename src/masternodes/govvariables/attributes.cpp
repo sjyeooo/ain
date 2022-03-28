@@ -155,53 +155,36 @@ const std::map<uint8_t, std::map<uint8_t, std::string>>& ATTRIBUTES::displayKeys
 
 static ResVal<int32_t> VerifyInt32(const std::string& str) {
     int32_t int32;
-    if (!ParseInt32(str, &int32) || int32 < 0) {
-        return Res::Err("Identifier must be a positive integer");
-    }
+    verifyRes(ParseInt32(str, &int32) && int32 >= 0, "Identifier must be a positive integer");
     return {int32, Res::Ok()};
 }
 
 static ResVal<CAttributeValue> VerifyFloat(const std::string& str) {
     CAmount amount = 0;
-    if (!ParseFixedPoint(str, 8, &amount) || amount < 0) {
-        return Res::Err("Amount must be a positive value");
-    }
+    verifyRes(ParseFixedPoint(str, 8, &amount) && amount >= 0, "Amount must be a positive value");
     return {amount, Res::Ok()};
 }
 
 static ResVal<CAttributeValue> VerifyPct(const std::string& str) {
-    auto resVal = VerifyFloat(str);
-    if (!resVal) {
-        return resVal;
-    }
-    if (std::get<CAmount>(*resVal.val) > COIN) {
-        return Res::Err("Percentage exceeds 100%%");
-    }
+    verifyDecl(resVal, VerifyFloat(str));
+    verifyRes(std::get<CAmount>(*resVal) <= COIN, "Percentage exceeds 100%%");
     return resVal;
 }
 
 static ResVal<CAttributeValue> VerifyCurrencyPair(const std::string& str) {
     const auto value = KeyBreaker(str);
-    if (value.size() != 2) {
-        return Res::Err("Exactly two entires expected for currency pair");
-    }
+    verifyRes(value.size() == 2, "Exactly two entires expected for currency pair");
+
     auto token = trim_all_ws(value[0]).substr(0, CToken::MAX_TOKEN_SYMBOL_LENGTH);
     auto currency = trim_all_ws(value[1]).substr(0, CToken::MAX_TOKEN_SYMBOL_LENGTH);
-    if (token.empty() || currency.empty()) {
-        return Res::Err("Empty token / currency");
-    }
+
+    verifyRes(!token.empty() && !currency.empty(), "Empty token / currency");
     return {CTokenCurrencyPair{token, currency}, Res::Ok()};
 }
 
 static ResVal<CAttributeValue> VerifyBool(const std::string& str) {
-    if (str != "true" && str != "false") {
-        return Res::Err(R"(Boolean value must be either "true" or "false")");
-    }
+    verifyRes(str == "true" || str == "false", R"(Boolean value must be either "true" or "false")");
     return {str == "true", Res::Ok()};
-}
-
-static bool VerifyToken(const CCustomCSView& view, const uint32_t id) {
-    return view.GetToken(DCT_ID{id}).has_value();
 }
 
 const std::map<uint8_t, std::map<uint8_t,
@@ -241,102 +224,70 @@ const std::map<uint8_t, std::map<uint8_t,
     return parsers;
 }
 
-static Res ShowError(const std::string& key, const std::map<std::string, uint8_t>& keys) {
+static std::string ShowError(const std::string& key, const std::map<std::string, uint8_t>& keys) {
     std::string error{"Unrecognised " + key + " argument provided, valid " + key + "s are:"};
     for (const auto& pair : keys) {
         error += ' ' + pair.first + ',';
     }
-    return Res::Err(error);
+    return error;
 }
 
 Res ATTRIBUTES::ProcessVariable(const std::string& key, const std::string& value,
                                 std::function<Res(const CAttributeType&, const CAttributeValue&)> applyVariable) const {
 
-    if (key.size() > 128) {
-        return Res::Err("Identifier exceeds maximum length (128)");
-    }
+    verifyRes(key.size() <= 128, "Identifier exceeds maximum length (128)");
 
     const auto keys = KeyBreaker(key);
-    if (keys.empty() || keys[0].empty()) {
-        return Res::Err("Empty version");
-    }
+    verifyRes(!keys.empty() && !keys[0].empty(), "Empty version");
 
-    if (value.empty()) {
-        return Res::Err("Empty value");
-    }
+    verifyRes(!value.empty(), "Empty value");
 
     auto iver = allowedVersions().find(keys[0]);
-    if (iver == allowedVersions().end()) {
-        return Res::Err("Unsupported version");
-    }
+    verifyRes(iver != allowedVersions().end(), "Unsupported version");
 
     auto version = iver->second;
-    if (version != VersionTypes::v0) {
-        return Res::Err("Unsupported version");
-    }
+    verifyRes(version == VersionTypes::v0, "Unsupported version");
 
-    if (keys.size() < 4 || keys[1].empty() || keys[2].empty() || keys[3].empty()) {
-        return Res::Err("Incorrect key for <type>. Object of ['<version>/<type>/ID/<key>','value'] expected");
-    }
+    verifyRes(keys.size() >= 4 && !keys[1].empty() && !keys[2].empty() && !keys[3].empty(),
+              "Incorrect key for <type>. Object of ['<version>/<type>/ID/<key>','value'] expected");
 
     auto itype = allowedTypes().find(keys[1]);
-    if (itype == allowedTypes().end()) {
-        return ::ShowError("type", allowedTypes());
-    }
+    verifyRes(itype != allowedTypes().end(), ::ShowError("type", allowedTypes()));
 
     auto type = itype->second;
 
     uint32_t typeId{0};
     if (type != AttributeTypes::Param) {
-        auto id = VerifyInt32(keys[2]);
-        if (!id) {
-            return std::move(id);
-        }
-        typeId = *id.val;
+        verifyDecl(id, VerifyInt32(keys[2]));
+        typeId = *id;
     } else {
         auto id = allowedParamIDs().find(keys[2]);
-        if (id == allowedParamIDs().end()) {
-            return ::ShowError("param", allowedParamIDs());
-        }
+        verifyRes(id != allowedParamIDs().end(), ::ShowError("param", allowedParamIDs()));
         typeId = id->second;
     }
 
     auto ikey = allowedKeys().find(type);
-    if (ikey == allowedKeys().end()) {
-        return Res::Err("Unsupported type {%d}", type);
-    }
+    verifyRes(ikey != allowedKeys().end(), "Unsupported type {%d}", type);
 
     itype = ikey->second.find(keys[3]);
-    if (itype == ikey->second.end()) {
-        return ::ShowError("key", ikey->second);
-    }
+    verifyRes(itype != ikey->second.end(), ::ShowError("key", ikey->second));
 
     auto typeKey = itype->second;
 
     CDataStructureV0 attrV0{type, typeId, typeKey};
 
     if (attrV0.IsExtendedSize()) {
-        if (keys.size() != 5 || keys[4].empty()) {
-            return Res::Err("Exact 5 keys are required {%d}", keys.size());
-        }
-        auto id = VerifyInt32(keys[4]);
-        if (!id) {
-            return std::move(id);
-        }
+        verifyRes(keys.size() == 5 && !keys[4].empty(), "Exact 5 keys are required {%d}", keys.size());
+        verifyDecl(id, VerifyInt32(keys[4]));
         attrV0.keyId = *id.val;
     } else {
-       if (keys.size() != 4) {
-           return Res::Err("Exact 4 keys are required {%d}", keys.size());
-        }
+       verifyRes(keys.size() == 4, "Exact 4 keys are required {%d}", keys.size());
     }
 
     try {
         if (auto parser = parseValue().at(type).at(typeKey)) {
-            auto attribValue = parser(value);
-            if (!attribValue) {
-                return std::move(attribValue);
-            }
-            return applyVariable(attrV0, *attribValue.val);
+            verifyDecl(attribValue, parser(value));
+            return applyVariable(attrV0, *attribValue);
         }
     } catch (const std::out_of_range&) {
     }
@@ -344,9 +295,7 @@ Res ATTRIBUTES::ProcessVariable(const std::string& key, const std::string& value
 }
 
 Res ATTRIBUTES::Import(const UniValue & val) {
-    if (!val.isObject()) {
-        return Res::Err("Object of values expected");
-    }
+    verifyRes(val.isObject(), "Object of values expected");
 
     std::map<std::string, UniValue> objMap;
     val.getObjMap(objMap);
@@ -355,9 +304,8 @@ Res ATTRIBUTES::Import(const UniValue & val) {
         auto res = ProcessVariable(key, value.get_str(),
             [this](const CAttributeType& attribute, const CAttributeValue& attrValue) {
                 if (auto attrV0 = std::get_if<CDataStructureV0>(&attribute)) {
-                    if (attrV0->type == AttributeTypes::Live) {
-                        return Res::Err("Live attribute cannot be set externally");
-                    }
+                    verifyRes(attrV0->type != AttributeTypes::Live, "Live attribute cannot be set externally");
+
                     // applay DFI via old keys
                     if (attrV0->IsExtendedSize() && attrV0->keyId == 0) {
                         auto newAttr = *attrV0;
@@ -427,68 +375,45 @@ UniValue ATTRIBUTES::Export() const {
 
 Res ATTRIBUTES::Validate(const CCustomCSView & view) const
 {
-    if (view.GetLastHeight() < Params().GetConsensus().FortCanningHillHeight)
-        return Res::Err("Cannot be set before FortCanningHill");
+    verifyRes(view.GetLastHeight() >= Params().GetConsensus().FortCanningHillHeight, "Cannot be set before FortCanningHill");
 
     for (const auto& attribute : attributes) {
         auto attrV0 = std::get_if<CDataStructureV0>(&attribute.first);
-        if (!attrV0) {
-            return Res::Err("Unsupported version");
-        }
+        verifyRes(attrV0, "Unsupported version");
+
         switch (attrV0->type) {
             case AttributeTypes::Token:
                 switch (attrV0->key) {
                     case TokenKeys::PaybackDFI:
                     case TokenKeys::PaybackDFIFeePCT:
-                        if (!view.GetLoanTokenByID({attrV0->typeId})) {
-                            return Res::Err("No such loan token (%d)", attrV0->typeId);
-                        }
+                        verifyRes(view.GetLoanTokenByID({attrV0->typeId}), "No such loan token (%d)", attrV0->typeId);
                         break;
                     case TokenKeys::LoanPayback:
                     case TokenKeys::LoanPaybackFeePCT:
-                        if (view.GetLastHeight() < Params().GetConsensus().FortCanningRoadHeight) {
-                            return Res::Err("Cannot be set before FortCanningRoad");
-                        }
-                        if (!view.GetLoanTokenByID(DCT_ID{attrV0->typeId})) {
-                            return Res::Err("No such loan token (%d)", attrV0->typeId);
-                        }
-                        if (!view.GetToken(DCT_ID{attrV0->keyId})) {
-                            return Res::Err("No such token (%d)", attrV0->keyId);
-                        }
+                        verifyRes(view.GetLastHeight() >= Params().GetConsensus().FortCanningRoadHeight, "Cannot be set before FortCanningRoad");
+                        verifyRes(view.GetLoanTokenByID(DCT_ID{attrV0->typeId}), "No such loan token (%d)", attrV0->typeId);
+                        verifyRes(view.GetToken(DCT_ID{attrV0->keyId}), "No such token (%d)", attrV0->keyId);
                         break;
                     case TokenKeys::DexInFeePct:
                     case TokenKeys::DexOutFeePct:
-                        if (view.GetLastHeight() < Params().GetConsensus().FortCanningRoadHeight) {
-                            return Res::Err("Cannot be set before FortCanningRoad");
-                        }
-                        if (!view.GetToken(DCT_ID{attrV0->typeId})) {
-                            return Res::Err("No such token (%d)", attrV0->typeId);
-                        }
+                        verifyRes(view.GetLastHeight() >= Params().GetConsensus().FortCanningRoadHeight, "Cannot be set before FortCanningRoad");
+                        verifyRes(view.GetToken(DCT_ID{attrV0->typeId}), "No such token (%d)", attrV0->typeId);
                         break;
                     case TokenKeys::LoanCollateralEnabled:
                     case TokenKeys::LoanCollateralFactor:
                     case TokenKeys::LoanMintingEnabled:
                     case TokenKeys::LoanMintingInterest: {
-                        if (view.GetLastHeight() < Params().GetConsensus().GreatWorldHeight) {
-                            return Res::Err("Cannot be set before GreatWorld");
-                        }
-                        if (!VerifyToken(view, attrV0->typeId)) {
-                            return Res::Err("No such token (%d)", attrV0->typeId);
-                        }
+                        verifyRes(view.GetLastHeight() >= Params().GetConsensus().GreatWorldHeight, "Cannot be set before GreatWorld");
+                        verifyRes(view.GetToken(DCT_ID{attrV0->typeId}), "No such token (%d)", attrV0->typeId);
+
                         CDataStructureV0 intervalPriceKey{AttributeTypes::Token, attrV0->typeId,
                                                           TokenKeys::FixedIntervalPriceId};
-                        if (GetValue(intervalPriceKey, CTokenCurrencyPair{}) == CTokenCurrencyPair{}) {
-                            return Res::Err("Fixed interval price currency pair must be set first");
-                        }
+                        verifyRes(CheckKey(intervalPriceKey), "Fixed interval price currency pair must be set first");
                         break;
                     }
                     case TokenKeys::FixedIntervalPriceId:
-                        if (view.GetLastHeight() < Params().GetConsensus().GreatWorldHeight) {
-                            return Res::Err("Cannot be set before GreatWorld");
-                        }
-                        if (!VerifyToken(view, attrV0->typeId)) {
-                            return Res::Err("No such token (%d)", attrV0->typeId);
-                        }
+                        verifyRes(view.GetLastHeight() >= Params().GetConsensus().GreatWorldHeight, "Cannot be set before GreatWorld");
+                        verifyRes(view.GetToken(DCT_ID{attrV0->typeId}), "No such token (%d)", attrV0->typeId);
                         break;
                     default:
                         return Res::Err("Unsupported key");
@@ -496,15 +421,11 @@ Res ATTRIBUTES::Validate(const CCustomCSView & view) const
                 break;
 
             case AttributeTypes::Poolpairs:
-                if (!std::get_if<CAmount>(&attribute.second)) {
-                    return Res::Err("Unsupported value");
-                }
+                verifyRes(std::get_if<CAmount>(&attribute.second), "Unsupported value");
                 switch (attrV0->key) {
                     case PoolKeys::TokenAFeePCT:
                     case PoolKeys::TokenBFeePCT:
-                        if (!view.GetPoolPair({attrV0->typeId})) {
-                            return Res::Err("No such pool (%d)", attrV0->typeId);
-                        }
+                        verifyRes(view.GetPoolPair({attrV0->typeId}), "No such pool (%d)", attrV0->typeId);
                         break;
                     default:
                         return Res::Err("Unsupported key");
@@ -512,9 +433,7 @@ Res ATTRIBUTES::Validate(const CCustomCSView & view) const
                 break;
 
             case AttributeTypes::Param:
-                if (attrV0->typeId != ParamIDs::DFIP2201) {
-                    return Res::Err("Unrecognised param id");
-                }
+                verifyRes(attrV0->typeId == ParamIDs::DFIP2201, "Unrecognised param id");
                 break;
 
                 // Live is set internally
@@ -538,36 +457,33 @@ Res ATTRIBUTES::Apply(CCustomCSView & mnview, const uint32_t height)
         }
         if (attrV0->type == AttributeTypes::Poolpairs) {
             auto poolId = DCT_ID{attrV0->typeId};
-            auto pool = mnview.GetPoolPair(poolId);
-            if (!pool) {
-                return Res::Err("No such pool (%d)", poolId.v);
-            }
+            verifyDecl(pool, mnview.GetPoolPair(poolId), "No such pool (%d)", poolId.v);
+
             auto tokenId = attrV0->key == PoolKeys::TokenAFeePCT ?
                            pool->idTokenA : pool->idTokenB;
 
             auto valuePct = std::get<CAmount>(attribute.second);
-            if (auto res = mnview.SetDexFeePct(poolId, tokenId, valuePct); !res) {
-                return res;
-            }
+            verifyRes(mnview.SetDexFeePct(poolId, tokenId, valuePct));
+
         } else if (attrV0->type == AttributeTypes::Token) {
             if (attrV0->key == TokenKeys::DexInFeePct
             ||  attrV0->key == TokenKeys::DexOutFeePct) {
                 DCT_ID tokenA{attrV0->typeId}, tokenB{~0u};
-                if (attrV0->key == TokenKeys::DexOutFeePct) {
+                if (attrV0->key == TokenKeys::DexOutFeePct)
                     std::swap(tokenA, tokenB);
-                }
+
                 auto valuePct = std::get<CAmount>(attribute.second);
-                if (auto res = mnview.SetDexFeePct(tokenA, tokenB, valuePct); !res) {
-                    return res;
-                }
+                verifyRes(mnview.SetDexFeePct(tokenA, tokenB, valuePct));
+
             } else if (attrV0->key == TokenKeys::FixedIntervalPriceId) {
                 if (const auto& currencyPair = std::get_if<CTokenCurrencyPair>(&attribute.second)) {
                     // Already exists, skip.
-                    if (mnview.GetFixedIntervalPrice(*currencyPair)) {
+                    if (mnview.GetFixedIntervalPrice(*currencyPair))
                         continue;
-                    } else if (!OraclePriceFeed(mnview, *currencyPair)) {
-                        return Res::Err("Price feed %s/%s does not belong to any oracle", currencyPair->first, currencyPair->second);
-                    }
+
+                    verifyRes(OraclePriceFeed(mnview, *currencyPair),
+                              "Price feed %s/%s does not belong to any oracle", currencyPair->first, currencyPair->second);
+
                     CFixedIntervalPrice fixedIntervalPrice;
                     fixedIntervalPrice.priceFeedId = *currencyPair;
                     fixedIntervalPrice.timestamp = time;
@@ -576,9 +492,9 @@ Res ATTRIBUTES::Apply(CCustomCSView & mnview, const uint32_t height)
                                                                   fixedIntervalPrice.priceFeedId.first,
                                                                   fixedIntervalPrice.priceFeedId.second,
                                                                   time);
-                    if (aggregatePrice) {
+                    if (aggregatePrice)
                         fixedIntervalPrice.priceRecord[1] = aggregatePrice;
-                    }
+
                     mnview.SetFixedIntervalPrice(fixedIntervalPrice);
                 } else {
                     return Res::Err("Unrecognised value for FixedIntervalPriceId");

@@ -11,81 +11,61 @@
 #include <masternodes/tokens.h>
 
 Res CSmartContractsConsensus::HandleDFIP2201Contract(const CSmartContractMessage& obj) const {
-    auto attributes = mnview.GetAttributes();
-    if (!attributes)
-        return Res::Err("Attributes unavailable");
+    verifyDecl(attributes, mnview.GetAttributes(), "Attributes unavailable");
 
     CDataStructureV0 activeKey{AttributeTypes::Param, ParamIDs::DFIP2201, DFIP2201Keys::Active};
 
-    if (!attributes->GetValue(activeKey, false))
-        return Res::Err("DFIP2201 smart contract is not enabled");
+    verifyRes(attributes->GetValue(activeKey, false), "DFIP2201 smart contract is not enabled");
 
-    if (obj.name != SMART_CONTRACT_DFIP_2201)
-        return Res::Err("DFIP2201 contract mismatch - got: " + obj.name);
+    verifyRes(obj.name == SMART_CONTRACT_DFIP_2201, "DFIP2201 contract mismatch - got: " + obj.name);
 
-    if (obj.accounts.size() != 1)
-        return Res::Err("Only one address entry expected for " + obj.name);
+    verifyRes(obj.accounts.size() == 1, "Only one address entry expected for " + obj.name);
 
-    if (obj.accounts.begin()->second.balances.size() != 1)
-        return Res::Err("Only one amount entry expected for " + obj.name);
+    verifyRes(obj.accounts.begin()->second.balances.size() == 1, "Only one amount entry expected for " + obj.name);
 
     const auto& script = obj.accounts.begin()->first;
-    if (!HasAuth(script))
-        return Res::Err("Must have at least one input from supplied address");
+    verifyRes(HasAuth(script), "Must have at least one input from supplied address");
 
     const auto& id = obj.accounts.begin()->second.balances.begin()->first;
     const auto& amount = obj.accounts.begin()->second.balances.begin()->second;
 
-    if (amount <= 0)
-        return Res::Err("Amount out of range");
+    verifyRes(amount > 0, "Amount out of range");
 
     CDataStructureV0 minSwapKey{AttributeTypes::Param, ParamIDs::DFIP2201, DFIP2201Keys::MinSwap};
     auto minSwap = attributes->GetValue(minSwapKey, CAmount{0});
 
-    if (minSwap && amount < minSwap)
-        return Res::Err("Below minimum swapable amount, must be at least " + GetDecimaleString(minSwap) + " BTC");
+    verifyRes(amount >= minSwap, "Below minimum swapable amount, must be at least " + GetDecimaleString(minSwap) + " BTC");
 
-    const auto token = mnview.GetToken(id);
-    if (!token)
-        return Res::Err("Specified token not found");
+    verifyDecl(token, mnview.GetToken(id), "Specified token not found");
 
-    if (token->symbol != "BTC" || token->name != "Bitcoin" || !token->IsDAT())
-        return Res::Err("Only Bitcoin can be swapped in " + obj.name);
+    verifyRes(token->symbol == "BTC" && token->name == "Bitcoin" && token->IsDAT(), "Only Bitcoin can be swapped in " + obj.name);
 
-    auto res = mnview.SubBalance(script, {id, amount});
-    if (!res)
-        return res;
+    verifyRes(mnview.SubBalance(script, {id, amount}));
 
     const CTokenCurrencyPair btcUsd{"BTC","USD"};
     const CTokenCurrencyPair dfiUsd{"DFI","USD"};
 
     bool useNextPrice{false}, requireLivePrice{true};
-    auto resVal = mnview.GetValidatedIntervalPrice(btcUsd, useNextPrice, requireLivePrice);
-    if (!resVal)
-        return std::move(resVal);
+    verifyDecl(BtcUsd, mnview.GetValidatedIntervalPrice(btcUsd, useNextPrice, requireLivePrice));
 
     CDataStructureV0 premiumKey{AttributeTypes::Param, ParamIDs::DFIP2201, DFIP2201Keys::Premium};
     auto premium = attributes->GetValue(premiumKey, CAmount{2500000});
 
-    const auto& btcPrice = MultiplyAmounts(*resVal.val, premium + COIN);
+    const auto& btcPrice = MultiplyAmounts(*BtcUsd, premium + COIN);
 
-    resVal = mnview.GetValidatedIntervalPrice(dfiUsd, useNextPrice, requireLivePrice);
-    if (!resVal)
-        return std::move(resVal);
+    verifyDecl(DfiUsd, mnview.GetValidatedIntervalPrice(dfiUsd, useNextPrice, requireLivePrice));
 
-    const auto totalDFI = MultiplyAmounts(DivideAmounts(btcPrice, *resVal.val), amount);
-    res = mnview.SubBalance(consensus.smartContracts.begin()->second, {{0}, totalDFI});
-    return !res ? res : mnview.AddBalance(script, {{0}, totalDFI});
+    const auto totalDFI = MultiplyAmounts(DivideAmounts(btcPrice, *DfiUsd), amount);
+    verifyRes(mnview.SubBalance(consensus.smartContracts.begin()->second, {{0}, totalDFI}));
+    return mnview.AddBalance(script, {{0}, totalDFI});
 }
 
 Res CSmartContractsConsensus::operator()(const CSmartContractMessage& obj) const {
-    if (obj.accounts.empty())
-        return Res::Err("Contract account parameters missing");
+    verifyRes(!obj.accounts.empty(), "Contract account parameters missing");
 
     auto contracts = consensus.smartContracts;
     auto contract = contracts.find(obj.name);
-    if (contract == contracts.end())
-        return Res::Err("Specified smart contract not found");
+    verifyRes(contract != contracts.end(), "Specified smart contract not found");
 
     // Convert to switch when it's long enough.
     if (obj.name == SMART_CONTRACT_DFIP_2201)

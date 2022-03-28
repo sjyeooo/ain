@@ -217,18 +217,13 @@ public:
 
     template<typename T>
     Res operator()(T& obj) const {
-        auto res = EnabledAfter<T>();
-        if (!res)
-            return res;
+        verifyRes(EnabledAfter<T>());
 
-        res = DisabledAfter<T>();
-        if (!res)
-            return res;
+        verifyRes(DisabledAfter<T>());
 
         CDataStream ss(metadata, SER_NETWORK, PROTOCOL_VERSION);
         ss >> obj;
-        if (!ss.empty())
-            return Res::Err("deserialization failed: excess %d bytes", ss.size());
+        verifyRes(ss.empty(), "deserialization failed: excess %d bytes", ss.size());
 
         return Res::Ok();
     }
@@ -599,7 +594,7 @@ std::vector<std::vector<DCT_ID>> CPoolSwap::CalculatePoolPaths(CCustomCSView& vi
             toPoolsID.emplace(pool.idTokenA.v, id);
         }
         return true;
-    }, {0});
+    });
 
     if (fromPoolsID.empty() || toPoolsID.empty()) {
         return {};
@@ -648,7 +643,7 @@ std::vector<std::vector<DCT_ID>> CPoolSwap::CalculatePoolPaths(CCustomCSView& vi
             }
         }
         return true;
-    }, {0});
+    });
 
     // return pool paths
     return poolPaths;
@@ -666,18 +661,14 @@ Res CPoolSwap::ExecuteSwap(CCustomCSView& view, std::vector<DCT_ID> poolIDs, boo
         poolIDs.clear();
     }
 
-    if (obj.amountFrom <= 0) {
-        return Res::Err("Input amount should be positive");
-    }
+    verifyRes(obj.amountFrom > 0, "Input amount should be positive");
 
     // Single swap if no pool IDs provided
     auto poolPrice = POOLPRICE_MAX;
     std::optional<std::pair<DCT_ID, CPoolPair> > poolPair;
     if (poolIDs.empty()) {
         poolPair = view.GetPoolPair(obj.idTokenFrom, obj.idTokenTo);
-        if (!poolPair) {
-            return Res::Err("Cannot find the pool pair.");
-        }
+        verifyRes(poolPair, "Cannot find the pool pair.");
 
         // Add single swap pool to vector for loop
         poolIDs.push_back(poolPair->first);
@@ -709,9 +700,7 @@ Res CPoolSwap::ExecuteSwap(CCustomCSView& view, std::vector<DCT_ID> poolIDs, boo
         else // Or get pools from IDs provided for composite swap
         {
             pool = view.GetPoolPair(currentID);
-            if (!pool) {
-                return Res::Err("Cannot find the pool pair.");
-            }
+            verifyRes(pool, "Cannot find the pool pair.");
         }
 
         // Check if last pool swap
@@ -720,12 +709,10 @@ Res CPoolSwap::ExecuteSwap(CCustomCSView& view, std::vector<DCT_ID> poolIDs, boo
         const auto swapAmount = swapAmountResult;
 
         if (height >= static_cast<uint32_t>(Params().GetConsensus().FortCanningHillHeight) && lastSwap) {
-            if (obj.idTokenTo == swapAmount.nTokenId) {
-                return Res::Err("Final swap should have idTokenTo as destination, not source");
-            }
-            if (pool->idTokenA != obj.idTokenTo && pool->idTokenB != obj.idTokenTo) {
-                return Res::Err("Final swap pool should have idTokenTo, incorrect final pool ID provided");
-            }
+            verifyRes(obj.idTokenTo != swapAmount.nTokenId, "Final swap should have idTokenTo as destination, not source");
+
+            verifyRes(pool->idTokenA == obj.idTokenTo || pool->idTokenB == obj.idTokenTo,
+                        "Final swap pool should have idTokenTo, incorrect final pool ID provided");
         }
 
         auto dexfeeInPct = view.GetDexFeeInPct(currentID, swapAmount.nTokenId);
@@ -750,44 +737,27 @@ Res CPoolSwap::ExecuteSwap(CCustomCSView& view, std::vector<DCT_ID> poolIDs, boo
             if (testOnly)
                 return Res::Ok();
 
-            auto res = view.SetPoolPair(currentID, height, *pool);
-            if (!res) {
-                return res;
-            }
+            verifyRes(view.SetPoolPair(currentID, height, *pool));
 
             CCustomCSView intermediateView(view);
             // hide interemidiate swaps
             auto& subView = i == 0 ? view : intermediateView;
-            res = subView.SubBalance(obj.from, swapAmount);
-            if (!res) {
-                return res;
-            }
+            verifyRes(subView.SubBalance(obj.from, swapAmount));
             intermediateView.Flush();
 
             auto& addView = lastSwap ? view : intermediateView;
-            res = addView.AddBalance(lastSwap ? obj.to : obj.from, swapAmountResult);
-            if (!res) {
-                return res;
-            }
+            verifyRes(addView.AddBalance(lastSwap ? obj.to : obj.from, swapAmountResult));
             intermediateView.Flush();
 
             // burn the dex in amount
-            if (dexfeeInAmount.nValue > 0) {
-                res = view.AddBalance(Params().GetConsensus().burnAddress, dexfeeInAmount);
-                if (!res) {
-                    return res;
-                }
-            }
+            if (dexfeeInAmount.nValue > 0)
+                verifyRes(view.AddBalance(Params().GetConsensus().burnAddress, dexfeeInAmount));
 
             // burn the dex out amount
-            if (dexfeeOutAmount.nValue > 0) {
-                res = view.AddBalance(Params().GetConsensus().burnAddress, dexfeeOutAmount);
-                if (!res) {
-                    return res;
-                }
-            }
+            if (dexfeeOutAmount.nValue > 0)
+                verifyRes(view.AddBalance(Params().GetConsensus().burnAddress, dexfeeOutAmount));
 
-           return res;
+           return Res::Ok();
         }, static_cast<int>(height));
 
         if (!poolResult) {
@@ -813,9 +783,7 @@ Res CPoolSwap::ExecuteSwap(CCustomCSView& view, std::vector<DCT_ID> poolIDs, boo
 
 Res SwapToDFIOverUSD(CCustomCSView & mnview, DCT_ID tokenId, CAmount amount, CScript const & from, CScript const & to, uint32_t height)
 {
-    auto token = mnview.GetToken(tokenId);
-    if (!token)
-        return Res::Err("Cannot find token with id %s!", tokenId.ToString());
+    verifyDecl(token, mnview.GetToken(tokenId), "Cannot find token with id %s!", tokenId.ToString());
 
     CPoolSwapMessage obj;
 
@@ -832,17 +800,11 @@ Res SwapToDFIOverUSD(CCustomCSView & mnview, DCT_ID tokenId, CAmount amount, CSc
     if (token->symbol == "DUSD")
         return poolSwap.ExecuteSwap(mnview, {});
 
-    auto dUsdToken = mnview.GetToken("DUSD");
-    if (!dUsdToken)
-        return Res::Err("Cannot find token DUSD");
+    verifyDecl(dUsdToken, mnview.GetToken("DUSD"), "Cannot find token DUSD");
 
-    auto pooldUSDDFI = mnview.GetPoolPair(dUsdToken->first, DCT_ID{0});
-    if (!pooldUSDDFI)
-        return Res::Err("Cannot find pool pair DUSD-DFI!");
+    verifyDecl(pooldUSDDFI, mnview.GetPoolPair(dUsdToken->first, DCT_ID{0}), "Cannot find pool pair DUSD-DFI!");
 
-    auto poolTokendUSD = mnview.GetPoolPair(tokenId,dUsdToken->first);
-    if (!poolTokendUSD)
-        return Res::Err("Cannot find pool pair %s-DUSD!", token->symbol);
+    verifyDecl(poolTokendUSD, mnview.GetPoolPair(tokenId,dUsdToken->first), "Cannot find pool pair %s-DUSD!", token->symbol);
 
     // swap tokenID -> USD -> DFI
     return poolSwap.ExecuteSwap(mnview, {poolTokendUSD->first, pooldUSDDFI->first});

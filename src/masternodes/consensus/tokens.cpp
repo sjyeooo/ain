@@ -10,9 +10,7 @@
 #include <primitives/transaction.h>
 
 Res CTokensConsensus::operator()(const CCreateTokenMessage& obj) const {
-    auto res = CheckTokenCreationTx();
-    if (!res)
-        return res;
+    verifyRes(CheckTokenCreationTx());
 
     CTokenImplementation token;
     static_cast<CToken&>(token) = obj;
@@ -23,63 +21,55 @@ Res CTokensConsensus::operator()(const CCreateTokenMessage& obj) const {
     token.creationHeight = height;
 
     // check foundation auth
-    if (token.IsDAT() && !HasFoundationAuth())
-        return Res::Err("tx not from foundation member");
+    if (token.IsDAT())
+        verifyRes(HasFoundationAuth(), "tx not from foundation member");
 
     if (static_cast<int>(height) >= consensus.BayfrontHeight) // formal compatibility if someone cheat and create LPS token on the pre-bayfront node
-        if (token.IsPoolShare())
-            return Res::Err("Cant't manually create 'Liquidity Pool Share' token; use poolpair creation");
+        verifyRes(!token.IsPoolShare(), "Cant't manually create 'Liquidity Pool Share' token; use poolpair creation");
 
     return mnview.CreateToken(token, static_cast<int>(height) < consensus.BayfrontHeight);
 }
 
 Res CTokensConsensus::operator()(const CUpdateTokenPreAMKMessage& obj) const {
-    auto pair = mnview.GetTokenByCreationTx(obj.tokenTx);
-    if (!pair)
-        return Res::Err("token with creationTx %s does not exist", obj.tokenTx.ToString());
+    verifyDecl(pair, mnview.GetTokenByCreationTx(obj.tokenTx), "token with creationTx %s does not exist", obj.tokenTx.ToString());
 
     const auto& token = pair->second;
 
     //check foundation auth
-    auto res = HasFoundationAuth();
+    verifyRes(HasFoundationAuth(), "tx not from foundation member");
 
     if (token.IsDAT() != obj.isDAT && pair->first >= CTokensView::DCT_ID_START) {
         CToken newToken = static_cast<CToken>(token); // keeps old and triggers only DAT!
         newToken.flags ^= (uint8_t)CToken::TokenFlags::DAT;
-        return !res ? res : mnview.UpdateToken(token.creationTx, newToken, true);
+        return mnview.UpdateToken(token.creationTx, newToken, true);
     }
-    return res;
+    return Res::Ok();
 }
 
 Res CTokensConsensus::operator()(const CUpdateTokenMessage& obj) const {
-    auto pair = mnview.GetTokenByCreationTx(obj.tokenTx);
-    if (!pair)
-        return Res::Err("token with creationTx %s does not exist", obj.tokenTx.ToString());
+    verifyDecl(pair, mnview.GetTokenByCreationTx(obj.tokenTx),
+              "token with creationTx %s does not exist", obj.tokenTx.ToString());
 
-    if (pair->first == DCT_ID{0})
-        return Res::Err("Can't alter DFI token!"); // may be redundant cause DFI is 'finalized'
+    verifyRes(pair->first != DCT_ID{0}, "Can't alter DFI token!");
 
     const auto& token = pair->second;
 
     // need to check it exectly here cause lps has no collateral auth (that checked next)
-    if (token.IsPoolShare())
-        return Res::Err("token %s is the LPS token! Can't alter pool share's tokens!", obj.tokenTx.ToString());
+    verifyRes(!token.IsPoolShare(), "token %s is the LPS token! Can't alter pool share's tokens!", obj.tokenTx.ToString());
 
     // check auth, depends from token's "origins"
     const Coin& auth = coins.AccessCoin(COutPoint(token.creationTx, 1)); // always n=1 output
     bool isFoundersToken = consensus.foundationMembers.count(auth.out.scriptPubKey) > 0;
 
-    auto res = Res::Ok();
-    if (isFoundersToken && !(res = HasFoundationAuth()))
-        return res;
-    else if (!(res = HasCollateralAuth(token.creationTx)))
-        return res;
+    if (isFoundersToken)
+        verifyRes(HasFoundationAuth(), "tx not from foundation member");
+    else
+        verifyRes(HasCollateralAuth(token.creationTx), "tx must have at least one input from the owner");
 
     // Check for isDAT change in non-foundation token after set height
     if (static_cast<int>(height) >= consensus.BayfrontMarinaHeight)
         //check foundation auth
-        if (obj.token.IsDAT() != token.IsDAT() && !HasFoundationAuth()) //no need to check Authority if we don't create isDAT
-            return Res::Err("can't set isDAT to true, tx not from foundation member");
+        verifyRes(obj.token.IsDAT() == token.IsDAT() || HasFoundationAuth(), "can't set isDAT to true, tx not from foundation member");
 
     auto updatedToken = obj.token;
     if (static_cast<int>(height) >= consensus.FortCanningHeight)
@@ -93,24 +83,14 @@ Res CTokensConsensus::operator()(const CMintTokensMessage& obj) const {
     for (const auto& kv : obj.balances) {
         DCT_ID tokenId = kv.first;
 
-        auto token = mnview.GetToken(tokenId);
-        if (!token)
-            return Res::Err("token %s does not exist!", tokenId.ToString());
+        verifyDecl(token, mnview.GetToken(tokenId), "token %s does not exist!", tokenId.ToString());
 
-        auto tokenImpl = static_cast<const CTokenImplementation&>(*token);
+        verifyDecl(mintable, MintableToken(tokenId, *token));
 
-        auto mintable = MintableToken(tokenId, tokenImpl);
-        if (!mintable)
-            return std::move(mintable);
+        verifyRes(mnview.AddMintedTokens(tokenId, kv.second));
 
-        auto minted = mnview.AddMintedTokens(tokenId, kv.second);
-        if (!minted)
-            return minted;
-
-        CalculateOwnerRewards(*mintable.val);
-        auto res = mnview.AddBalance(*mintable.val, CTokenAmount{kv.first, kv.second});
-        if (!res)
-            return res;
+        CalculateOwnerRewards(*mintable);
+        verifyRes(mnview.AddBalance(*mintable, CTokenAmount{kv.first, kv.second}));
     }
     return Res::Ok();
 }

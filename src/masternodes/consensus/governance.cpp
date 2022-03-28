@@ -30,38 +30,32 @@ Res CGovernanceConsensus::storeGovVars(const CGovernanceHeightMessage& obj) cons
 
 Res CGovernanceConsensus::operator()(const CGovernanceMessage& obj) const {
     //check foundation auth
-    if (!HasFoundationAuth())
-        return Res::Err("tx not from foundation member");
+    verifyRes(HasFoundationAuth(), "tx not from foundation member");
 
     for(const auto& gov : obj.govs) {
-        if (!gov.second)
-            return Res::Err("'%s': variable does not registered", gov.first);
+        verifyRes(gov.second, "'%s': variable does not registered", gov.first);
 
         auto var = gov.second;
-        Res res{};
+
+        auto err = [&](const std::string& msg) {
+            return strprintf("%s: %s", var->GetName(), msg);
+        };
 
         if (var->GetName() == "ATTRIBUTES") {
             // Add to existing ATTRIBUTES instead of overwriting.
-            auto govVar = mnview.GetAttributes();
-
-            if (!govVar) {
-                return Res::Err("%s: %s", var->GetName(), "Failed to get existing ATTRIBUTES");
-            }
+            verifyDecl(govVar, mnview.GetAttributes(), err("Failed to get existing ATTRIBUTES"));
 
             govVar->time = time;
 
             // Validate as complete set. Check for future conflicts between key pairs.
-            if (!(res = govVar->Import(var->Export()))
-            ||  !(res = govVar->Validate(mnview)))
-                return Res::Err("%s: %s", var->GetName(), res.msg);
+            verifyRes(govVar->Import(var->Export()), err(res.msg));
+            verifyRes(govVar->Validate(mnview), err(res.msg));
 
             var = govVar;
         } else {
             // After GW, some ATTRIBUTES changes require the context of its map to validate,
             // moving this Validate() call to else statement from before this conditional.
-            res = var->Validate(mnview);
-            if (!res)
-                return Res::Err("%s: %s", var->GetName(), res.msg);
+            verifyRes(var->Validate(mnview), err(res.msg));
 
             if (var->GetName() == "ORACLE_BLOCK_INTERVAL") {
                 // Make sure ORACLE_BLOCK_INTERVAL only updates at end of interval
@@ -74,31 +68,24 @@ Res CGovernanceConsensus::operator()(const CGovernanceMessage& obj) const {
             }
         }
 
-        if (!(res = var->Apply(mnview, height))
-        ||  !(res = mnview.SetVariable(*var)))
-            return Res::Err("%s: %s", var->GetName(), res.msg);
+        verifyRes(var->Apply(mnview, height), err(res.msg));
+        verifyRes(mnview.SetVariable(*var), err(res.msg));
     }
     return Res::Ok();
 }
 
 Res CGovernanceConsensus::operator()(const CGovernanceHeightMessage& obj) const {
     //check foundation auth
-    if (!HasFoundationAuth())
-        return Res::Err("tx not from foundation member");
+    verifyRes(HasFoundationAuth());
 
-    if (!obj.govVar)
-        return Res::Err("'%s': variable does not registered", obj.govName);
+    verifyRes(obj.govVar, "'%s': variable does not registered", obj.govName);
 
-    if (obj.startHeight <= height)
-        return Res::Err("startHeight must be above the current block height");
+    verifyRes(obj.startHeight > height, "startHeight must be above the current block height");
 
-    if (obj.govVar->GetName() == "ORACLE_BLOCK_INTERVAL")
-        return Res::Err("%s: %s", obj.govVar->GetName(), "Cannot set via setgovheight.");
+    verifyRes(obj.govVar->GetName() != "ORACLE_BLOCK_INTERVAL", "%s: Cannot set via setgovheight.", obj.govVar->GetName());
 
     // Validate GovVariables before storing
-    auto result = obj.govVar->Validate(mnview);
-    if (!result)
-        return Res::Err("%s: %s", obj.govVar->GetName(), result.msg);
+    verifyRes(obj.govVar->Validate(mnview), "%s: %s", obj.govVar->GetName());
 
     // Store pending Gov var change
     return storeGovVars(obj);

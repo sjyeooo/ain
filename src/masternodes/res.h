@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <tinyformat.h>
+#include <tuple>
 
 struct Res
 {
@@ -72,6 +73,11 @@ struct ResVal : public Res
         return *val;
     }
 
+    const T* operator->() const {
+        assert(ok);
+        return &(*val);
+    }
+
     T& operator*() {
         assert(ok);
         return *val;
@@ -92,5 +98,28 @@ struct ResVal : public Res
         return *val;
     }
 };
+
+template<typename T>
+Res ResOrErr(T&& res) {
+    if constexpr (std::is_convertible_v<T, Res>) {
+        return std::forward<T>(res);
+    } else {
+        return Res{false};
+    }
+}
+
+template<typename...Args>
+Res StrToRes(Args&&... args) {
+    if constexpr (sizeof...(args) == 0) {
+        return Res::Ok();
+    } else if constexpr (std::is_convertible_v<std::tuple_element_t<0, std::tuple<Args...>>, uint32_t>) {
+        return Res::ErrCode(args...);
+    } else {
+        return Res::Err(args...);
+    }
+}
+
+#define verifyRes(x, ...) do if (auto res = x; !res) { auto tmp = ::StrToRes(__VA_ARGS__); return tmp ? ::ResOrErr(std::move(res)) : tmp; } while(0)
+#define verifyDecl(x, y, ...) auto x = y; do if (!x) { auto tmp = ::StrToRes(__VA_ARGS__); return tmp ? ::ResOrErr(std::move(x)) : tmp; } while(0)
 
 #endif //DEFI_MASTERNODES_RES_H

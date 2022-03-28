@@ -15,10 +15,8 @@ Res LP_LOAN_TOKEN_SPLITS::Import(const UniValue & val)
         return Res::Err("object of {poolId: rate,... } expected");
 
     for (const std::string& key : val.getKeys()) {
-        const auto id = DCT_ID::FromString(key);
-        if (!id)
-            return std::move(id);
-        splits.emplace(*id.val, AmountFromValue(val[key]));
+        verifyDecl(id, DCT_ID::FromString(key));
+        splits.emplace(*id, AmountFromValue(val[key]));
     }
     return Res::Ok();
 }
@@ -34,21 +32,18 @@ UniValue LP_LOAN_TOKEN_SPLITS::Export() const
 
 Res LP_LOAN_TOKEN_SPLITS::Validate(const CCustomCSView & mnview) const
 {
-    if (mnview.GetLastHeight() < Params().GetConsensus().FortCanningHeight)
-        return Res::Err("Cannot be set before FortCanning");
+    verifyRes(mnview.GetLastHeight() >= Params().GetConsensus().FortCanningHeight, "Cannot be set before FortCanning");
 
     CAmount total{0};
     for (auto const & kv : splits) {
-        if (!mnview.HasPoolPair(kv.first))
-            return Res::Err("pool with id=%s not found", kv.first.ToString());
+        verifyRes(mnview.HasPoolPair(kv.first), "pool with id=%s not found", kv.first.ToString());
 
-        if (kv.second < 0 || kv.second > COIN)
-            return Res::Err("wrong percentage for pool with id=%s, value = %s", kv.first.ToString(), std::to_string(kv.second));
+        verifyRes(kv.second >= 0 && kv.second <= COIN,
+                  "wrong percentage for pool with id=%s, value = %s", kv.first.ToString(), std::to_string(kv.second));
 
         total += kv.second;
     }
-    if (total != COIN)
-        return Res::Err("total = %d vs expected %d", total, COIN);
+    verifyRes(total == COIN, "total = %d vs expected %d", total, COIN);
 
     return Res::Ok();
 }

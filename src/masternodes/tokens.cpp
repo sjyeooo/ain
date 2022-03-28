@@ -106,28 +106,21 @@ Res CTokensView::CreateDFIToken()
 ResVal<DCT_ID> CTokensView::CreateToken(const CTokensView::CTokenImpl & token, bool isPreBayfront)
 {
     // this should not happen, but for sure
-    if (GetTokenByCreationTx(token.creationTx)) {
-        return Res::Err("token with creation tx %s already exists!", token.creationTx.ToString());
-    }
+    verifyRes(!GetTokenByCreationTx(token.creationTx), "token with creation tx %s already exists!", token.creationTx.ToString());
 
-    auto checkSymbolRes = token.IsValidSymbol();
-    if (!checkSymbolRes.ok) {
-        return checkSymbolRes;
-    }
+    verifyRes(token.IsValidSymbol());
 
     DCT_ID id{0};
     if(token.IsDAT()) {
-        if (GetToken(token.symbol)) {
-            return Res::Err("token '%s' already exists!", token.symbol);
-        }
+        verifyRes(!GetToken(token.symbol), "token '%s' already exists!", token.symbol);
+
         ForEachToken([&](DCT_ID const& currentId, CLazySerialize<CTokenImplementation>) {
             if(currentId < DCT_ID_START)
                 id.v = currentId.v + 1;
             return currentId < DCT_ID_START;
         }, id);
         if (id == DCT_ID_START) {
-            if (isPreBayfront)
-                return Res::Err("Critical fault: trying to create DCT_ID same as DCT_ID_START for Foundation owner\n"); // asserted before BayfrontHeight, keep it for strict sameness
+            verifyRes(!isPreBayfront, "Critical fault: trying to create DCT_ID same as DCT_ID_START for Foundation owner\n"); // asserted before BayfrontHeight, keep it for strict sameness
             id = IncrementLastDctId();
             LogPrintf("Warning! Range <DCT_ID_START already filled. Using \"common\" id=%s for new token\n", id.ToString().c_str());
         }
@@ -145,34 +138,28 @@ ResVal<DCT_ID> CTokensView::CreateToken(const CTokensView::CTokenImpl & token, b
 
 Res CTokensView::UpdateToken(const uint256 &tokenTx, const CToken& newToken, bool isPreBayfront)
 {
-    auto pair = GetTokenByCreationTx(tokenTx);
-    if (!pair) {
-        return Res::Err("token with creationTx %s does not exist!", tokenTx.ToString());
-    }
+    verifyDecl(pair, GetTokenByCreationTx(tokenTx), "token with creationTx %s does not exist!", tokenTx.ToString());
+
     DCT_ID id = pair->first;
     CTokenImpl & oldToken = pair->second;
 
-    if (!isPreBayfront && oldToken.IsFinalized()) { // for compatibility, in potential case when someone cheat and create finalized token with old node (and then alter dat for ex.)
-        return Res::Err("can't alter 'Finalized' tokens");
-    }
+    if (!isPreBayfront)
+        // for compatibility, in potential case when someone cheat and create finalized token with old node (and then alter dat for ex.)
+        verifyRes(!oldToken.IsFinalized(), "can't alter 'Finalized' tokens");
 
     // 'name' and 'symbol' were trimmed in 'Apply'
     oldToken.name = newToken.name;
 
     // check new symbol correctness
-    auto checkSymbolRes = newToken.IsValidSymbol();
-    if (!checkSymbolRes.ok) {
-        return checkSymbolRes;
-    }
+    verifyRes(newToken.IsValidSymbol());
 
     // deal with DB symbol indexes before touching symbols/DATs:
     if (oldToken.symbol != newToken.symbol || oldToken.IsDAT() != newToken.IsDAT()) { // in both cases it leads to index changes
         // create keys with regard of new flag
         std::string oldSymbolKey = oldToken.CreateSymbolKey(id);
         std::string newSymbolKey = newToken.CreateSymbolKey(id);
-        if (GetToken(newSymbolKey)) {
-            return Res::Err("token with key '%s' already exists!", newSymbolKey);
-        }
+        verifyRes(!GetToken(newSymbolKey), "token with key '%s' already exists!", newSymbolKey);
+
         EraseBy<Symbol>(oldSymbolKey);
         WriteBy<Symbol>(newSymbolKey, id);
     }
@@ -224,15 +211,10 @@ Res CTokensView::BayfrontFlagsCleanup()
 
 Res CTokensView::AddMintedTokens(DCT_ID const &id, CAmount const & amount)
 {
-    auto tokenImpl = GetToken(id);
-    if (!tokenImpl) {
-        return Res::Err("token with id %d does not exist!", id.v);
-    }
+    verifyDecl(tokenImpl, GetToken(id), "token with id %d does not exist!", id.v);
 
-    auto resMinted = SafeAdd(tokenImpl->minted, amount);
-    if (!resMinted) {
-        return Res::Err("overflow when adding to minted");
-    }
+    verifyDecl(resMinted, SafeAdd(tokenImpl->minted, amount), "overflow when adding to minted");
+
     tokenImpl->minted = resMinted;
 
     WriteBy<ID>(id, *tokenImpl);
@@ -241,15 +223,11 @@ Res CTokensView::AddMintedTokens(DCT_ID const &id, CAmount const & amount)
 
 Res CTokensView::SubMintedTokens(DCT_ID const &id, CAmount const & amount)
 {
-    auto tokenImpl = GetToken(id);
-    if (!tokenImpl) {
-        return Res::Err("token with id %d does not exist!", id.v);
-    }
+    verifyDecl(tokenImpl, GetToken(id), "token with id %d does not exist!", id.v);
 
     auto resMinted = tokenImpl->minted - amount;
-    if (resMinted < 0) {
-        return Res::Err("not enough tokens exist to subtract this amount");
-    }
+    verifyRes(resMinted >= 0, "not enough tokens exist to subtract this amount");
+
     tokenImpl->minted = resMinted;
 
     WriteBy<ID>(id, *tokenImpl);
