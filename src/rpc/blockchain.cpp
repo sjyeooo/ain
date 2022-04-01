@@ -1569,10 +1569,11 @@ static UniValue invalidateblock(const JSONRPCRequest& request)
     InvalidateBlock(state, Params(), pblockindex);
 
     if (state.IsValid()) {
-        ActivateBestChain(state, Params());
-    }
-
-    if (!state.IsValid()) {
+        std::thread([]() {
+            CValidationState state;
+            ActivateBestChain(state, Params());
+        }).detach();
+    } else {
         throw JSONRPCError(RPC_DATABASE_ERROR, FormatStateMessage(state));
     }
 
@@ -1606,12 +1607,10 @@ static UniValue reconsiderblock(const JSONRPCRequest& request)
         ResetBlockFailureFlags(pblockindex);
     }
 
-    CValidationState state;
-    ActivateBestChain(state, Params());
-
-    if (!state.IsValid()) {
-        throw JSONRPCError(RPC_DATABASE_ERROR, FormatStateMessage(state));
-    }
+    std::thread([]() {
+        CValidationState state;
+        ActivateBestChain(state, Params());
+    }).detach();
 
     return NullUniValue;
 }
