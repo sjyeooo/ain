@@ -1561,6 +1561,7 @@ public:
                 }
             }
 
+            CalculateOwnerRewards(obj.owner);
             res = TransferTokenBalance(obj.source.nTokenId, obj.source.nValue, *contractAddressValue, obj.owner);
             if (!res) {
                 return res;
@@ -1571,6 +1572,7 @@ public:
                 return res;
             }
         } else {
+            CalculateOwnerRewards(obj.owner);
             auto res = TransferTokenBalance(obj.source.nTokenId, obj.source.nValue, obj.owner, *contractAddressValue);
             if (!res) {
                 return res;

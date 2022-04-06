@@ -3351,6 +3351,12 @@ void CChainState::ProcessFutures(const CBlockIndex* pindex, CCustomCSView& cache
 
     auto txn = std::numeric_limits<uint32_t>::max();
 
+    auto CalculateOwnerRewards = [](CCustomCSView& view, const CScript& owner, uint32_t height) {
+        CCustomCSView mnview(view);
+        mnview.CalculateOwnerRewards(owner, height);
+        mnview.Flush();
+    };
+
     cache.ForEachFuturesUserValues([&](const CFuturesUserKey& key, const CFuturesUserValue& futuresValues){
 
         CHistoryWriters writers{paccountHistoryDB.get(), nullptr, nullptr};
@@ -3372,6 +3378,7 @@ void CChainState::ProcessFutures(const CBlockIndex* pindex, CCustomCSView& cache
                     const auto total = DivideAmounts(futuresValues.source.nValue, premiumPrice);
                     view.AddMintedTokens(destId, total);
                     CTokenAmount destination{destId, total};
+                    CalculateOwnerRewards(view, key.owner, pindex->nHeight);
                     view.AddBalance(key.owner, destination);
                     burned.Add(futuresValues.source);
                     minted.Add(destination);
@@ -3391,6 +3398,7 @@ void CChainState::ProcessFutures(const CBlockIndex* pindex, CCustomCSView& cache
                 const auto total = MultiplyAmounts(futuresValues.source.nValue, discountPrice);
                 view.AddMintedTokens(tokenDUSD->first, total);
                 CTokenAmount destination{tokenDUSD->first, total};
+                CalculateOwnerRewards(view, key.owner, pindex->nHeight);
                 view.AddBalance(key.owner, destination);
                 burned.Add(futuresValues.source);
                 minted.Add(destination);
@@ -3423,6 +3431,7 @@ void CChainState::ProcessFutures(const CBlockIndex* pindex, CCustomCSView& cache
 
         CHistoryWriters addWriters{paccountHistoryDB.get(), nullptr, nullptr};
         CAccountsHistoryWriter addView(cache, pindex->nHeight, txn--, {}, uint8_t(CustomTxType::FutureSwapRefund), &addWriters);
+        CalculateOwnerRewards(addView, key.owner, pindex->nHeight);
         addView.AddBalance(key.owner, value.source);
         addView.Flush();
 
